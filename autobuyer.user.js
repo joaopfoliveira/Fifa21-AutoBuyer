@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         FUT 21 Autobuyer Menu with TamperMonkey
 // @namespace    http://tampermonkey.net/
-// @version      2.0.8
+// @version      2.0.9
 // @updateURL    https://raw.githubusercontent.com/chithakumar13/Fifa21-AutoBuyer/master/autobuyer.js
 // @downloadURL  https://raw.githubusercontent.com/chithakumar13/Fifa21-AutoBuyer/master/autobuyer.js
 // @description  FUT Snipping Tool
@@ -118,7 +118,8 @@
         nameProxyPort = '#elem_' + makeid(15),
         nameProxyLogin = '#elem_' + makeid(15),
         nameAntiCaptchKey = '#elem_' + makeid(15),
-        nameProxyPassword = '#elem_' + makeid(15);
+        nameProxyPassword = '#elem_' + makeid(15),
+        nameBlacklist = '#elem_' + makeid(15);
 
     window.loadFilter = function () {
         var filterName = $('select[name=filters] option').filter(':selected').val();
@@ -784,6 +785,16 @@
                         '   <h1 class="secondary">Sell settings:</h1>' +
                         '</div>' +
                         '<div><br></div>' +
+                        '<div class="price-filter" style="width: 100%;">' +
+                        '   <div class="info">' +
+                        '       <span class="secondary label">Black list:</span><br><small>Send to transfer list the following players (one per line):</small>' +
+                        '   </div>' +
+                        '   <div class="buttonInfo">' +
+                        '       <div class="inputBox">' +
+                        '           <textarea id="' + nameBlacklist.substring(1) + '" style="width: 100%; height: 6em;"></textarea>' +
+                        '       </div>' +
+                        '   </div>' +
+                        '</div>' +
                         '<div class="price-filter">' +
                         '   <div class="info">' +
                         '       <span class="secondary label">Sell Price:</span><br/><small>Receive After Tax: <span id="' + nameSellAfterTax.substring(1) + '">0</span></small>' +
@@ -1694,6 +1705,12 @@
     window.getItemName = function (itemObj) {
         return window.format_string(itemObj._staticData.name, 15);
     };
+    window.getBlacklist = function () {
+        return document.querySelector(nameBlacklist)
+            .value
+            .split('\n')
+            .filter(name => name != null && name.length > 0);
+    }
     window.winCount = 0;
     window.lossCount = 0;
     window.bidCount = 0;
@@ -2323,6 +2340,9 @@
                 if (isBin && sellPrice !== 0 && !isNaN(sellPrice)) {
                     window.winCount++;
                     let sym = " W:" + window.format_string(window.winCount.toString(), 4);
+                    if (window.getBlacklist().some(name => name.toLowerCase() === player._staticData.name.toLowerCase())) {
+                        sellPrice = -1;
+                    }
                     writeToLog(sym + " | " + player_name + ' | ' + price_txt + ((isBin) ? ' | buy | success | selling for: ' + sellPrice : ' | bid | success |' + ' selling for: ' + sellPrice));
                     window.play_audio('card_won');
                     window.sellRequestTimeout = window.setTimeout(function () {
