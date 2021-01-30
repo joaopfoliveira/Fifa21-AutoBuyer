@@ -119,7 +119,7 @@
         nameProxyLogin = '#elem_' + makeid(15),
         nameAntiCaptchKey = '#elem_' + makeid(15),
         nameProxyPassword = '#elem_' + makeid(15),
-        nameBlacklist = '#elem_' + makeid(15);
+        nameAbProfitMargin = '#elem_' + makeid(15);
 
     window.loadFilter = function () {
         var filterName = $('select[name=filters] option').filter(':selected').val();
@@ -785,16 +785,17 @@
                         '   <h1 class="secondary">Sell settings:</h1>' +
                         '</div>' +
                         '<div><br></div>' +
-                        '<div class="price-filter" style="width: 100%;">' +
+                        '<div class="price-filter">' +
                         '   <div class="info">' +
-                        '       <span class="secondary label">Black list:</span><br><small>Send to transfer list the following players (one per line):</small>' +
+                        '       <span class="secondary label">Profit margin:</span><br/><small>(Sell this percentage over the buy price):</small>' +
                         '   </div>' +
                         '   <div class="buttonInfo">' +
                         '       <div class="inputBox">' +
-                        '           <textarea id="' + nameBlacklist.substring(1) + '" style="width: 100%; height: 6em;"></textarea>' +
+                        '           <input type="tel" class="numericInput" id="' + nameAbProfitMargin.substring(1) + '" placeholder="10">' +
                         '       </div>' +
                         '   </div>' +
                         '</div>' +
+                        '<div><br></div>' +
                         '<div class="price-filter">' +
                         '   <div class="info">' +
                         '       <span class="secondary label">Sell Price:</span><br/><small>Receive After Tax: <span id="' + nameSellAfterTax.substring(1) + '">0</span></small>' +
@@ -1705,11 +1706,8 @@
     window.getItemName = function (itemObj) {
         return window.format_string(itemObj._staticData.name, 15);
     };
-    window.getBlacklist = function () {
-        return document.querySelector(nameBlacklist)
-            .value
-            .split('\n')
-            .filter(name => name != null && name.length > 0);
+    window.getProfitMargin = function () {
+        return parseInt(document.querySelector(nameAbProfitMargin).value, 10) / 100.0;
     }
     window.winCount = 0;
     window.lossCount = 0;
@@ -2332,34 +2330,42 @@
             let price_txt = window.format_string(price.toString(), 6)
             let player_name = window.getItemName(player);
             if (data.success) {
+                let xhr = new XMLHttpRequest();
+                xhr.addEventListener('load', () => {
+                    const futbinPlayerInfo = JSON.parse(`${xhr.response}`);
+                    const futbinSellPrice = parseInt(futbinPlayerInfo[player.resourceId].prices.ps.LCPrice.replace(',', ''), 10);
 
-                if (isBin) {
-                    window.purchasedCardCount++;
-                }
-
-                if (isBin && sellPrice !== 0 && !isNaN(sellPrice)) {
-                    window.winCount++;
-                    let sym = " W:" + window.format_string(window.winCount.toString(), 4);
-                    if (window.getBlacklist().some(name => name.toLowerCase() === player._staticData.name.toLowerCase())) {
+                    sellPrice = futbinSellPrice;
+                    if (futbinSellPrice === 0) {
                         sellPrice = -1;
                     }
-                    writeToLog(sym + " | " + player_name + ' | ' + price_txt + ((isBin) ? ' | buy | success | selling for: ' + sellPrice : ' | bid | success |' + ' selling for: ' + sellPrice));
-                    window.play_audio('card_won');
-                    window.sellRequestTimeout = window.setTimeout(function () {
-                        services.Item.list(player, window.getSellBidPrice(sellPrice), sellPrice, 3600);
-                    }, window.getRandomWait());
-                } else {
-                    window.bidCount++;
-                    services.Item.move(player, enums.FUTItemPile.CLUB).observe(this, (function (sender, moveResponse) {
-                        let sym = " B:" + window.format_string(window.bidCount.toString(), 4);
-                        writeToLog(sym + " | " + player_name + ' | ' + price_txt + ((isBin) ? ' | buy | success | move to club' : ' | bid | success | waiting to expire'));
-                    }));
-                }
 
-                if (jQuery(nameTelegramBuy).val() == 'B' || jQuery(nameTelegramBuy).val() == 'A') {
-                    window.sendNotificationToUser("| " + player_name.trim() + ' | ' + price_txt.trim() + ' | buy |');
-                }
-
+                    if (isBin) {
+                        window.purchasedCardCount++;
+                    }
+    
+                    if (isBin && sellPrice !== 0 && !isNaN(sellPrice)) {
+                        window.winCount++;
+                        let sym = " W:" + window.format_string(window.winCount.toString(), 4);
+                        writeToLog(sym + " | " + player_name + ' | ' + price_txt + ((isBin) ? ' | buy | success | selling for: ' + sellPrice : ' | bid | success |' + ' selling for: ' + sellPrice));
+                        window.play_audio('card_won');
+                        window.sellRequestTimeout = window.setTimeout(function () {
+                            services.Item.list(player, window.getSellBidPrice(sellPrice), sellPrice, 3600);
+                        }, window.getRandomWait());
+                    } else {
+                        window.bidCount++;
+                        services.Item.move(player, enums.FUTItemPile.CLUB).observe(this, (function (sender, moveResponse) {
+                            let sym = " B:" + window.format_string(window.bidCount.toString(), 4);
+                            writeToLog(sym + " | " + player_name + ' | ' + price_txt + ((isBin) ? ' | buy | success | move to club' : ' | bid | success | waiting to expire'));
+                        }));
+                    }
+    
+                    if (jQuery(nameTelegramBuy).val() == 'B' || jQuery(nameTelegramBuy).val() == 'A') {
+                        window.sendNotificationToUser("| " + player_name.trim() + ' | ' + price_txt.trim() + ' | buy |');
+                    }
+                });
+                xhr.open('GET', `https://www.futbin.com/21/playerPrices?player=${player.resourceId}`);
+                xhr.send();
             } else {
                 window.lossCount++;
                 let sym = " L:" + window.format_string(window.lossCount.toString(), 4);
