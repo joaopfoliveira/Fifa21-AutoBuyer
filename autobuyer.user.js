@@ -18,6 +18,17 @@
 (function () {
     'use strict';
 
+    let ultimateTeamSessionId;
+
+    const setRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+    XMLHttpRequest.prototype.setRequestHeader = function() {
+        const [sessionIdKey, sessionIdValue] = arguments;
+        if (sessionIdKey === 'X-UT-SID') {
+            ultimateTeamSessionId = sessionIdValue;
+        }
+        return setRequestHeader.apply(this, arguments);
+    };
+
     window.controllerInstance = null;
     window.UTAutoBuyerViewController = function () {
         UTMarketSearchFiltersViewController.call(this);
@@ -2330,20 +2341,11 @@
             let price_txt = window.format_string(price.toString(), 6)
             let player_name = window.getItemName(player);
             if (data.success) {
-                let xhr = new XMLHttpRequest();
-                xhr.addEventListener('load', () => {
-                    const futbinPlayerInfo = JSON.parse(`${xhr.response}`);
-                    const futbinSellPrice = parseInt(futbinPlayerInfo[player.resourceId].prices.ps.LCPrice.replace(',', ''), 10);
-
-                    sellPrice = futbinSellPrice;
-                    if (futbinSellPrice === 0) {
-                        sellPrice = -1;
-                    }
-
+                if (sellPrice >= 0) {
                     if (isBin) {
                         window.purchasedCardCount++;
                     }
-    
+
                     if (isBin && sellPrice !== 0 && !isNaN(sellPrice)) {
                         window.winCount++;
                         let sym = " W:" + window.format_string(window.winCount.toString(), 4);
@@ -2359,13 +2361,47 @@
                             writeToLog(sym + " | " + player_name + ' | ' + price_txt + ((isBin) ? ' | buy | success | move to club' : ' | bid | success | waiting to expire'));
                         }));
                     }
-    
+
                     if (jQuery(nameTelegramBuy).val() == 'B' || jQuery(nameTelegramBuy).val() == 'A') {
                         window.sendNotificationToUser("| " + player_name.trim() + ' | ' + price_txt.trim() + ' | buy |');
                     }
-                });
-                xhr.open('GET', `https://www.futbin.com/21/playerPrices?player=${player.resourceId}`);
-                xhr.send();
+                } else {
+                    findPlayerLowestPrice(player.resourceId, function(sellPrice) {
+                        if (isBin) {
+                            window.purchasedCardCount++;
+                        }
+
+                        if (sellPrice === 0) {
+                            sellPrice = -1;
+                        } else if (price >= sellPrice) {
+                            sellPrice = window.getBuyBidPrice(price);
+                        } else if (price >= window.getSellBidPrice(sellPrice)) {
+                            sellPrice = sellPrice;
+                        } else {
+                            sellPrice = window.getSellBidPrice(sellPrice);
+                        }
+
+                        if (isBin && sellPrice !== 0 && !isNaN(sellPrice)) {
+                            window.winCount++;
+                            let sym = " W:" + window.format_string(window.winCount.toString(), 4);
+                            writeToLog(sym + " | " + player_name + ' | ' + price_txt + ((isBin) ? ' | buy | success | selling for: ' + sellPrice : ' | bid | success |' + ' selling for: ' + sellPrice));
+                            window.play_audio('card_won');
+                            window.sellRequestTimeout = window.setTimeout(function () {
+                                services.Item.list(player, window.getSellBidPrice(sellPrice), sellPrice, 3600);
+                            }, window.getRandomWait());
+                        } else {
+                            window.bidCount++;
+                            services.Item.move(player, enums.FUTItemPile.CLUB).observe(this, (function (sender, moveResponse) {
+                                let sym = " B:" + window.format_string(window.bidCount.toString(), 4);
+                                writeToLog(sym + " | " + player_name + ' | ' + price_txt + ((isBin) ? ' | buy | success | move to club' : ' | bid | success | waiting to expire'));
+                            }));
+                        }
+
+                        if (jQuery(nameTelegramBuy).val() == 'B' || jQuery(nameTelegramBuy).val() == 'A') {
+                            window.sendNotificationToUser("| " + player_name.trim() + ' | ' + price_txt.trim() + ' | buy |');
+                        }
+                    });
+                }
             } else {
                 window.lossCount++;
                 let sym = " L:" + window.format_string(window.lossCount.toString(), 4);
@@ -2518,6 +2554,87 @@
 
     window.clearSoldItems = function () {
         services.Item.clearSoldItems().observe(this, function (t, response) {
+        });
+    }
+
+    async function findPlayerLowestPrice(playerId, callbackFn) {
+        let lastPrice = 0;
+        let price = 0;
+        let count = 0;
+        let tryCount = 0;
+
+        if (window.useFutBin === true) {
+            price = await makeRequest('GET', `https://www.futbin.com/21/playerPrices?player=${playerId}`)
+        }
+
+        do {
+            tryCount++;
+            lastPrice = price;
+            const info = await findMinPlayerPriceFromMarket(playerId, price <= 0 ? null : window.getSellBidPrice(price));
+            price = info.price;
+            count = info.count;
+
+            if(count >= 21) {
+                const randomTimeout = Math.round(Math.random() * 1000 + 1000);
+                await delay(randomTimeout);
+            }
+        } while (count >= 21);
+
+        if (count <= 0) {
+            price = window.getSellBidPrice(lastPrice);
+        }
+
+        writeToDebugLog(`Search attempts to find lower price: ${tryCount}`);
+        callbackFn(price);
+    }
+
+    function delay(timeout) {
+        return new Promise(function (resolve, reject) {
+            setTimeout(function() {
+                resolve();
+            }, timeout);
+        });
+    }
+
+    async function findMinPlayerPriceFromMarket(playerId, maxPrice) {
+        const searchPlayerPriceUrl = "https://utas.external.s2.fut.ea.com/ut/game/fifa21/transfermarket?num=21&start=0&type=player&maskedDefId=";
+        let maxPriceParam = "&maxb=";
+     
+        let requestUrl = `${searchPlayerPriceUrl}${playerId}`;
+        if (maxPrice != null) {
+            requestUrl = `${requestUrl}${maxPriceParam}${maxPrice}`;
+        }
+
+        const response = JSON.parse(await makeRequest("GET", requestUrl, ultimateTeamSessionId));
+        let currentMinPrice = response.auctionInfo.map(ai => ai.buyNowPrice).sort((a,b) => a - b).shift();
+
+        return {price: currentMinPrice, count: response.auctionInfo.length};
+    }
+
+    function makeRequest(method, url, ultimateTeamSessionId) {
+        return new Promise(function (resolve, reject) {
+            let xhr = new XMLHttpRequest();
+            xhr.open(method, url);
+            if (ultimateTeamSessionId) {
+                xhr.setRequestHeader('X-UT-SID', ultimateTeamSessionId);
+            }
+            xhr.addEventListener('load', function () {
+                if (this.status >= 200 && this.status < 300) {
+                    resolve(xhr.response);
+                } else {
+                    resolve({auctionInfo: [], error: {
+                        status: this.status,
+                        statusText: xhr.statusText
+                    }});
+                }
+            });
+            xhr.addEventListener('error', function () {
+                resolve({auctionInfo: [], error: {
+                    status: this.status,
+                    statusText: xhr.statusText
+                }});
+            });
+            xhr.send();
         });
     }
 })();
